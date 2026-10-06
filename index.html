@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Blockyard</title>
+<style>
+html,body{margin:0;height:100%;overflow:hidden;background:#111;font:14px system-ui,sans-serif;color:#fff}
+canvas{display:block}
+.p{position:fixed;background:#000b;border-radius:8px;padding:8px 10px}
+#info{top:8px;left:8px;line-height:1.5}
+#bar{bottom:8px;left:50%;transform:translateX(-50%);display:flex;gap:6px;align-items:center}
+#bar span{padding:3px 8px;border-radius:5px;background:#333}
+#bar .on{background:#3b82f6}
+#tools{top:8px;right:8px;display:flex;gap:6px}
+button,input{font:inherit;border-radius:6px;border:0;padding:6px 10px}
+button{background:#3b82f6;color:#fff;cursor:pointer}
+#chatw{bottom:8px;left:8px;width:300px;max-width:40vw;background:#0008}
+#chat{max-height:140px;overflow:auto;word-break:break-word}
+#cr{display:none;gap:4px;margin-top:4px}#ci{flex:1;min-width:0}
+#cross{position:fixed;top:50%;left:50%;width:6px;height:6px;margin:-3px;border-radius:50%;background:#fff;opacity:.8}
+#pop{position:fixed;inset:0;background:#000c;display:flex;align-items:center;justify-content:center;z-index:9}
+#pop div{background:#222;padding:24px;border-radius:12px;width:280px;display:flex;flex-direction:column;gap:10px}
+html,body{touch-action:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+input{font-size:16px}
+#tc,#acts,#bb{pointer-events:none}
+#tc{display:none}
+.t #tc{display:block}
+.t #help{display:none}
+.t #info{padding:4px 8px}
+.t #bar{top:8px;bottom:auto;font-size:12px;flex-wrap:wrap;max-width:56vw;justify-content:center}
+.t #bar span{padding:6px 8px}
+.t #tools button{font-size:12px;padding:6px 8px}
+.t #chatw{bottom:auto;top:72px;z-index:5;width:38vw;max-width:260px;font-size:12px}
+.t #chat{max-height:90px}
+#joy{position:fixed;left:calc(24px + env(safe-area-inset-left,0px));bottom:calc(24px + env(safe-area-inset-bottom,0px));width:130px;height:130px;border-radius:50%;background:#fff3;pointer-events:auto}
+#knob{position:absolute;left:37px;top:37px;width:56px;height:56px;border-radius:50%;background:#fffa}
+#acts{position:fixed;right:calc(10px + env(safe-area-inset-right,0px));bottom:calc(10px + env(safe-area-inset-bottom,0px));width:210px;display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px}
+#acts button{width:54px;height:54px;border-radius:50%;background:#3b82f6cc;font-size:12px;padding:0;pointer-events:auto}
+#bb{display:none;flex-wrap:wrap;gap:8px;justify-content:flex-end;width:100%}
+#bb button{pointer-events:auto}
+#bD{display:none}
+</style></head><body>
+<div id="pop"><div>
+<h2 style="margin:0">Blockyard</h2>
+<input id="nm" placeholder="Display name" maxlength="16">
+<input id="rc" placeholder="Room code (blank = host new room)" maxlength="4">
+<button id="go">Play</button>
+<small style="opacity:.7">Click the screen to look around. Press B to build.</small>
+</div></div>
+<div id="cross"></div>
+<div id="info" class="p"><span id="help">WASD move · Shift sprint · Space jump · F fly (Space/C up/down)<br>B build · 1-5 shape · R rotate · V color · Click place · Right-click delete · Enter chat<br></span><b id="room"></b></div>
+<div id="tools" class="p"><button id="ex">Export</button><button id="im">Import</button><button id="cl">Clear</button><input type="file" id="fi" accept=".json" hidden></div>
+<div id="bar" class="p"></div>
+<div id="chatw" class="p"><div id="chat"></div><div id="cr"><input id="ci" maxlength="200" placeholder="Say something..." enterkeyhint="send" autocomplete="off"><button id="cs">Send</button></div></div>
+
+<div id="tc"><div id="joy"><div id="knob"></div></div>
+<div id="acts"><div id="bb"><button id="bS">Shape</button><button id="bV">Color</button><button id="bR">Rotate</button><button id="bX">Delete</button><button id="bP" style="background:#22c55ecc">Place</button></div>
+<button id="bD">Down</button><button id="bC">Chat</button><button id="bF">Fly</button><button id="bB">Build</button><button id="bJ" style="width:70px;height:70px">Jump</button></div></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.min.js"></script>
+<script>
+const $=id=>document.getElementById(id);
+const touch=navigator.maxTouchPoints>0||'ontouchstart' in window;if(touch)document.body.classList.add('t');
+let name='',peer,conns=[],isHost=false,myId='solo',started=false,build=false,fly=false;
+let yaw=0,pitch=0,shape=0,col=0,rot=0;
+const keys={},COL=[0xe74c3c,0xf39c12,0xf1c40f,0x2ecc71,0x3498db,0x9b59b6,0xecf0f1,0x34495e];
+const NAMES=['cube','wall','floor','pillar','ball'];
+const T={cube:[1,1,1],wall:[4,3,.5],floor:[4,.25,4],pillar:[1,4,1],ball:[1.5,1.5,1.5]};
+
+// ---------- scene ----------
+const scene=new THREE.Scene();scene.background=new THREE.Color(0x87ceeb);
+const cam=new THREE.PerspectiveCamera(75,innerWidth/innerHeight,.1,300);cam.rotation.order='YXZ';
+const ren=new THREE.WebGLRenderer({antialias:true});ren.setPixelRatio(Math.min(devicePixelRatio,2));ren.setSize(innerWidth,innerHeight);document.body.prepend(ren.domElement);
+scene.add(new THREE.HemisphereLight(0xffffff,0x556655,.9));
+const sun=new THREE.DirectionalLight(0xffffff,.6);sun.position.set(30,50,20);scene.add(sun);
+const ground=new THREE.Mesh(new THREE.PlaneGeometry(200,200),new THREE.MeshLambertMaterial({color:0x8a8f99}));
+ground.rotation.x=-Math.PI/2;scene.add(ground);
+const grid=new THREE.GridHelper(200,200,0x555555,0x777777);grid.position.y=.01;scene.add(grid);
+addEventListener('resize',()=>{ren.setSize(innerWidth,innerHeight);cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix()});
+
+// ---------- objects ----------
+const objs=new Map();
+const geo=t=>t=='pillar'?new THREE.CylinderGeometry(.5,.5,1,16):t=='ball'?new THREE.SphereGeometry(.5,16,12):new THREE.BoxGeometry(1,1,1);
+const ext=d=>{const s=T[d.t];return d.r%2?[s[2],s[1],s[0]]:s};
+function addObj(d,send){
+  const m=new THREE.Mesh(geo(d.t),new THREE.MeshLambertMaterial({color:d.c}));
+  m.scale.set(...T[d.t]);m.position.set(d.x,d.y,d.z);m.rotation.y=d.r*Math.PI/2;
+  scene.add(m);objs.set(d.id,{d,m});if(send)net({k:'add',d});
+}
+function delObj(id,send){const o=objs.get(id);if(!o)return;scene.remove(o.m);objs.delete(id);if(send)net({k:'del',id})}
+const level=()=>[...objs.values()].map(o=>o.d);
+function loadLevel(l){[...objs.keys()].forEach(i=>delObj(i));l.forEach(d=>addObj(d))}
+
+// ---------- ghost + aiming ----------
+const ghost=new THREE.Mesh(geo('cube'),new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,opacity:.45}));
+ghost.visible=false;scene.add(ghost);
+const ray=new THREE.Raycaster();ray.far=25;
+function aim(){ray.setFromCamera({x:0,y:0},cam);return ray.intersectObjects([ground,...[...objs.values()].map(o=>o.m)])[0]}
+function target(h){
+  const t=NAMES[shape],d={t,r:rot,c:COL[col]},o=ext(d);
+  const n=h.face.normal.clone().transformDirection(h.object.matrixWorld);
+  const sn=(v,g)=>Math.round(v/g)*g;
+  const ax=(p,nv,half,g)=>Math.abs(nv)>.5?p+Math.sign(nv)*half:sn(p,g);
+  d.x=ax(h.point.x,n.x,o[0]/2,.5);d.y=ax(h.point.y,n.y,o[1]/2,.25);d.z=ax(h.point.z,n.z,o[2]/2,.5);
+  return d;
+}
+
+// ---------- player ----------
+const P={x:0,y:0,z:5,vy:0,g:false},R=.3,H=1.7;
+function hit(x,y,z){
+  for(const{d}of objs.values()){const o=ext(d);
+    if(Math.abs(x-d.x)<o[0]/2+R&&Math.abs(z-d.z)<o[2]/2+R&&y<d.y+o[1]/2&&y+H>d.y-o[1]/2)return 1}
+  return 0;
+}
+function mv(ax,dv){
+  const n={x:P.x,z:P.z};n[ax]+=dv;
+  if(!hit(n.x,P.y,n.z)){P[ax]=n[ax]}
+  else if(!fly&&!hit(n.x,P.y+.55,n.z)){P[ax]=n[ax];P.y+=.55}
+}
+function step(dt){
+  const f=(keys.KeyW?1:0)-(keys.KeyS?1:0)+joy.y,s=(keys.KeyD?1:0)-(keys.KeyA?1:0)+joy.x,sp=keys.ShiftLeft||Math.hypot(joy.x,joy.y)>.95?9:5;
+  mv('x',(-Math.sin(yaw)*f+Math.cos(yaw)*s)*sp*dt);
+  mv('z',(-Math.cos(yaw)*f-Math.sin(yaw)*s)*sp*dt);
+  if(fly){P.vy=((keys.Space?1:0)-(keys.KeyC?1:0))*7;P.g=false}
+  else{P.vy-=25*dt;if(keys.Space&&P.g)P.vy=8}
+  const ny=P.y+P.vy*dt;
+  if(hit(P.x,ny,P.z)){if(P.vy<0)P.g=true;P.vy=0}else{P.y=ny;if(!fly)P.g=false}
+  if(P.y<0){P.y=0;P.vy=0;P.g=true}
+  if(P.y>150)P.y=150;
+}
+
+// ---------- remote players ----------
+const rem=new Map();
+function mk(n){
+  const g=new THREE.Group(),mat=new THREE.MeshLambertMaterial({color:Math.random()*0xffffff});
+  const b=new THREE.Mesh(new THREE.CylinderGeometry(.3,.3,1.3,12),mat);b.position.y=.65;
+  const h=new THREE.Mesh(new THREE.SphereGeometry(.28,12,10),mat);h.position.y=1.5;
+  const c=document.createElement('canvas');c.width=256;c.height=64;const x=c.getContext('2d');
+  x.fillStyle='#0008';x.fillRect(0,0,256,64);x.fillStyle='#fff';x.font='32px sans-serif';x.textAlign='center';x.fillText(n,128,44);
+  const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(c)}));sp.scale.set(2,.5,1);sp.position.y=2.2;
+  g.add(b,h,sp);scene.add(g);return{g,t:new THREE.Vector3(),ry:0};
+}
+function upd(m){
+  let r=rem.get(m.id);
+  if(!r){r=mk(m.n);rem.set(m.id,r);r.g.position.set(m.x,m.y,m.z);log('System',m.n+' joined')}
+  r.t.set(m.x,m.y,m.z);r.ry=m.r;
+}
+function rmP(id){const r=rem.get(id);if(r){scene.remove(r.g);rem.delete(id)}}
+
+// ---------- chat ----------
+function log(n,t){
+  const d=document.createElement('div'),b=document.createElement('b');
+  b.textContent=n+': ';d.append(b,document.createTextNode(t));
+  const c=$('chat');c.append(d);while(c.children.length>50)c.firstChild.remove();c.scrollTop=1e9;
+}
+
+// ---------- networking (WebRTC via PeerJS, no server of your own) ----------
+function net(m,except){conns.forEach(c=>c.open&&c!==except&&c.send(m))}
+function on(c,m){
+  if(m.k=='p')upd(m);
+  else if(m.k=='add'&&!objs.has(m.d.id))addObj(m.d);
+  else if(m.k=='del')delObj(m.id);
+  else if(m.k=='chat')log(m.n,m.t);
+  else if(m.k=='lvl')loadLevel(m.l);
+  else if(m.k=='bye')rmP(m.id);
+  if(isHost)net(m,c);
+}
+function startNet(code){
+  if(!window.Peer){log('System','Network library failed to load. Playing solo.');return}
+  isHost=!code;
+  const code2=code||Math.random().toString(36).slice(2,6).toUpperCase();
+  peer=isHost?new Peer('bp-'+code2):new Peer();
+  peer.on('error',e=>log('System',e.type=='peer-unavailable'?'Room not found.':'Network error ('+e.type+'). Playing solo.'));
+  peer.on('open',id=>{
+    myId=id;
+    $('room').textContent='Room code: '+code2;
+    if(isHost)return;
+    const c=peer.connect('bp-'+code2);
+    c.on('open',()=>{conns.push(c);log('System','Connected!')});
+    c.on('data',m=>on(c,m));
+    c.on('close',()=>log('System','Disconnected from host'));
+  });
+  peer.on('connection',c=>{
+    conns.push(c);
+    c.on('open',()=>c.send({k:'lvl',l:level()}));
+    c.on('data',m=>on(c,m));
+    c.on('close',()=>{conns=conns.filter(x=>x!==c);rmP(c.peer);net({k:'bye',id:c.peer})});
+  });
+}
+
+// ---------- UI ----------
+function openChat(){document.exitPointerLock();$('cr').style.display='flex';$('ci').focus()}
+function closeChat(){$('cr').style.display='none';$('ci').blur();if(!touch)ren.domElement.requestPointerLock()}
+function bar(){
+  $('bar').innerHTML=NAMES.map((n,i)=>`<span data-i="${i}" class="${build&&i==shape?'on':''}">${i+1} ${n}</span>`).join('')+
+  `<span style="background:#${COL[col].toString(16).padStart(6,'0')}">&nbsp;&nbsp;&nbsp;</span><span>${build?'BUILD':'PLAY'}${fly?' · FLY':''}</span>`;
+  $('bb').style.display=build?'flex':'none';$('bD').style.display=fly?'block':'none';
+}
+bar();
+$('bar').addEventListener('click',e=>{const i=e.target.dataset.i;if(i!=null){shape=+i;build=true;bar()}});
+$('go').onclick=()=>{
+  name=$('nm').value.trim()||'Player'+Math.floor(Math.random()*999);
+  $('pop').style.display='none';started=true;
+  startNet($('rc').value.trim().toUpperCase());
+  if(touch){try{document.documentElement.requestFullscreen()?.catch(()=>{})}catch(_){}}else ren.domElement.requestPointerLock();
+};
+$('ex').onclick=()=>{const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(level())],{type:'application/json'}));a.download='level.json';a.click()};
+$('im').onclick=()=>$('fi').click();
+$('fi').onchange=async e=>{try{const l=JSON.parse(await e.target.files[0].text());loadLevel(l);net({k:'lvl',l})}catch(_){log('System','Bad level file')}e.target.value=''};
+$('cl').onclick=()=>{loadLevel([]);net({k:'lvl',l:[]})};
+ren.domElement.onclick=()=>started&&!touch&&ren.domElement.requestPointerLock();
+function sendChat(){const t=$('ci').value.trim();$('ci').value='';if(t){log(name,t);net({k:'chat',n:name,t})}}
+$('ci').onkeydown=e=>{if(e.key=='Enter'){sendChat();closeChat()}else if(e.key=='Escape')closeChat()};
+$('cs').onclick=()=>{sendChat();closeChat()};
+addEventListener('keydown',e=>{
+  if(document.activeElement.tagName=='INPUT'||!started)return;
+  keys[e.code]=true;
+  if(e.code=='Enter'){e.preventDefault();openChat();return}
+  if(e.code=='KeyB'){build=!build;bar()}
+  if(e.code=='KeyF'){fly=!fly;bar()}
+  if(e.code=='KeyR')rot=(rot+1)%4;
+  if(e.code=='KeyV'){col=(col+1)%COL.length;bar()}
+  if(e.code>='Digit1'&&e.code<='Digit5'){shape=+e.code[5]-1;build=true;bar()}
+});
+addEventListener('keyup',e=>keys[e.code]=false);
+addEventListener('mousemove',e=>{
+  if(document.pointerLockElement!==ren.domElement)return;
+  yaw-=e.movementX*.002;pitch=Math.max(-1.5,Math.min(1.5,pitch-e.movementY*.002));
+});
+addEventListener('contextmenu',e=>e.preventDefault());
+function act(b){
+  const h=aim();if(!h)return;
+  if(b==0){const d=target(h);d.id=Math.random().toString(36).slice(2,10);addObj(d,true)}
+  else if(b==2&&h.object!==ground){for(const[id,o]of objs)if(o.m===h.object){delObj(id,true);break}}
+}
+addEventListener('mousedown',e=>{if(build&&document.pointerLockElement===ren.domElement)act(e.button)});
+
+// ---------- touch controls ----------
+const joy={x:0,y:0};let jid=null,lid=null,lx=0,ly=0;
+const jb=$('joy'),kn=$('knob'),cv=ren.domElement,NP={passive:false};
+const find=(e,id)=>[...e.changedTouches].find(t=>t.identifier===id);
+function jset(t){
+  const r=jb.getBoundingClientRect();let dx=(t.clientX-r.left-65)/65,dy=(t.clientY-r.top-65)/65;
+  const l=Math.hypot(dx,dy);if(l>1){dx/=l;dy/=l}
+  joy.x=dx;joy.y=-dy;kn.style.transform=`translate(${dx*37}px,${dy*37}px)`;
+}
+function jend(){joy.x=joy.y=0;jid=null;kn.style.transform=''}
+jb.addEventListener('touchstart',e=>{e.preventDefault();const t=e.changedTouches[0];jid=t.identifier;jset(t)},NP);
+jb.addEventListener('touchmove',e=>{e.preventDefault();const t=find(e,jid);if(t)jset(t)},NP);
+['touchend','touchcancel'].forEach(n=>jb.addEventListener(n,e=>{if(find(e,jid))jend()}));
+cv.addEventListener('touchstart',e=>{
+  e.preventDefault();
+  if($('cr').style.display=='flex')closeChat();
+  if(lid!==null)return;const t=e.changedTouches[0];lid=t.identifier;lx=t.clientX;ly=t.clientY;
+},NP);
+cv.addEventListener('touchmove',e=>{
+  e.preventDefault();const t=find(e,lid);if(!t)return;
+  yaw-=(t.clientX-lx)*.005;pitch=Math.max(-1.5,Math.min(1.5,pitch-(t.clientY-ly)*.005));lx=t.clientX;ly=t.clientY;
+},NP);
+['touchend','touchcancel'].forEach(n=>cv.addEventListener(n,e=>{if(find(e,lid))lid=null}));
+function hold(id,k){
+  const b=$(id);b.addEventListener('touchstart',e=>{e.preventDefault();keys[k]=true},NP);
+  ['touchend','touchcancel'].forEach(n=>b.addEventListener(n,()=>keys[k]=false));
+}
+function tap(id,fn){$(id).addEventListener('touchstart',e=>{e.preventDefault();fn()},NP)}
+hold('bJ','Space');hold('bD','KeyC');
+tap('bF',()=>{fly=!fly;bar()});tap('bB',()=>{build=!build;bar()});$('bC').onclick=openChat;tap('cs',()=>{sendChat();closeChat()});
+tap('bS',()=>{shape=(shape+1)%5;bar()});tap('bV',()=>{col=(col+1)%COL.length;bar()});
+tap('bR',()=>{rot=(rot+1)%4});tap('bP',()=>act(0));tap('bX',()=>act(2));
+
+// ---------- loop ----------
+let last=performance.now(),tick=0;
+(function loop(now){
+  requestAnimationFrame(loop);
+  const dt=Math.min(.05,(now-last)/1e3);last=now;
+  if(started){
+    step(dt);
+    if(conns.length&&now-tick>60){tick=now;net({k:'p',id:myId,n:name,x:P.x,y:P.y,z:P.z,r:yaw})}
+  }
+  cam.position.set(P.x,P.y+1.6,P.z);cam.rotation.set(pitch,yaw,0);
+  rem.forEach(r=>{r.g.position.lerp(r.t,.3);r.g.rotation.y=r.ry});
+  ghost.visible=false;
+  if(build&&started){
+    const h=aim();
+    if(h){const d=target(h);ghost.geometry=geo(d.t);ghost.scale.set(...T[d.t]);
+      ghost.position.set(d.x,d.y,d.z);ghost.rotation.y=d.r*Math.PI/2;ghost.material.color.setHex(d.c);ghost.visible=true}
+  }
+  ren.render(scene,cam);
+})(performance.now());
+</script></body></html>
